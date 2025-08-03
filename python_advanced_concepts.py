@@ -267,6 +267,358 @@ def read_config_file(filename: str) -> Dict[str, Any]:
         return json.load(file)
 
 # ============================================================================
+# 4.1 ADVANCED CONTEXT MANAGERS FOR FULL-STACK DEVELOPMENT
+# ============================================================================
+
+import time
+import threading
+from typing import Generator, Optional
+import requests
+from contextlib import asynccontextmanager
+
+# 1. Database Connection Pool Context Manager
+class DatabaseConnection:
+    def __init__(self, connection_string: str):
+        self.connection_string = connection_string
+        self.connection = None
+    
+    def __enter__(self):
+        print(f"Connecting to database: {self.connection_string}")
+        self.connection = f"DB_CONNECTION_{id(self)}"  # Simulate connection
+        return self.connection
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print(f"Closing database connection: {self.connection}")
+        self.connection = None
+        if exc_type:
+            print(f"Database error occurred: {exc_val}")
+            return False  # Re-raise the exception
+        return True
+
+# 2. API Rate Limiting Context Manager
+class RateLimiter:
+    def __init__(self, max_requests: int, time_window: float):
+        self.max_requests = max_requests
+        self.time_window = time_window
+        self.requests = []
+        self.lock = threading.Lock()
+    
+    def __enter__(self):
+        with self.lock:
+            current_time = time.time()
+            # Remove old requests outside the time window
+            self.requests = [req_time for req_time in self.requests 
+                           if current_time - req_time < self.time_window]
+            
+            if len(self.requests) >= self.max_requests:
+                sleep_time = self.time_window - (current_time - self.requests[0])
+                if sleep_time > 0:
+                    print(f"Rate limit reached. Waiting {sleep_time:.2f} seconds...")
+                    time.sleep(sleep_time)
+            
+            self.requests.append(current_time)
+            return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass  # No cleanup needed
+
+# 3. Cache Context Manager
+class CacheContext:
+    def __init__(self, cache_key: str, ttl: int = 300):
+        self.cache_key = cache_key
+        self.ttl = ttl
+        self.cache = {}  # In real app, this would be Redis/Memcached
+    
+    def __enter__(self):
+        if self.cache_key in self.cache:
+            cached_data, timestamp = self.cache[self.cache_key]
+            if time.time() - timestamp < self.ttl:
+                print(f"Cache hit for key: {self.cache_key}")
+                return cached_data
+        print(f"Cache miss for key: {self.cache_key}")
+        return None
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:  # No exception occurred
+            # In real implementation, you'd store the result here
+            pass
+
+# 4. Logging Context Manager
+@contextmanager
+def log_operation(operation_name: str, **kwargs):
+    start_time = time.time()
+    print(f"Starting {operation_name} with params: {kwargs}")
+    try:
+        yield
+        print(f"Completed {operation_name} successfully in {time.time() - start_time:.2f}s")
+    except Exception as e:
+        print(f"Failed {operation_name} after {time.time() - start_time:.2f}s: {e}")
+        raise
+    finally:
+        print(f"Finished {operation_name}")
+
+# 5. Temporary File Context Manager
+@contextmanager
+def temporary_file(prefix: str = "temp", suffix: str = ".tmp"):
+    import tempfile
+    import os
+    
+    temp_file = tempfile.NamedTemporaryFile(prefix=prefix, suffix=suffix, delete=False)
+    try:
+        yield temp_file.name
+    finally:
+        temp_file.close()
+        os.unlink(temp_file.name)  # Delete the file
+
+# 6. Async Context Manager for API Calls
+@asynccontextmanager
+async def api_session(base_url: str, timeout: int = 30):
+    session = requests.Session()
+    session.timeout = timeout
+    try:
+        yield session
+    finally:
+        session.close()
+
+# 7. Database Transaction with Rollback
+@contextmanager
+def database_transaction_with_rollback(db_connection):
+    transaction_id = f"TXN_{int(time.time())}"
+    print(f"Starting transaction {transaction_id}")
+    
+    try:
+        # Simulate database operations
+        yield transaction_id
+        print(f"Committing transaction {transaction_id}")
+    except Exception as e:
+        print(f"Rolling back transaction {transaction_id} due to: {e}")
+        raise
+    finally:
+        print(f"Transaction {transaction_id} completed")
+
+# 8. Resource Pool Context Manager
+class ConnectionPool:
+    def __init__(self, max_connections: int = 5):
+        self.max_connections = max_connections
+        self.active_connections = 0
+        self.lock = threading.Lock()
+    
+    def __enter__(self):
+        with self.lock:
+            if self.active_connections >= self.max_connections:
+                raise RuntimeError("No available connections in pool")
+            self.active_connections += 1
+            connection_id = f"CONN_{self.active_connections}"
+            print(f"Acquired connection {connection_id}")
+            return connection_id
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with self.lock:
+            self.active_connections -= 1
+            print(f"Released connection. Active: {self.active_connections}")
+
+# 9. Performance Monitoring Context Manager
+@contextmanager
+def performance_monitor(operation_name: str):
+    start_time = time.time()
+    start_memory = 0  # In real app, use psutil to get memory usage
+    
+    try:
+        yield
+    finally:
+        end_time = time.time()
+        duration = end_time - start_time
+        print(f"Performance: {operation_name} took {duration:.4f}s")
+
+# 10. Configuration Context Manager
+@contextmanager
+def configuration_context(config_file: str):
+    import os
+    original_env = os.environ.copy()
+    
+    try:
+        # Load configuration from file
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # Set environment variables
+        for key, value in config.items():
+            os.environ[key] = str(value)
+        
+        yield config
+    finally:
+        # Restore original environment
+        os.environ.clear()
+        os.environ.update(original_env)
+
+# 11. File Lock Context Manager
+@contextmanager
+def file_lock(filename: str):
+    lock_file = f"{filename}.lock"
+    
+    try:
+        # Try to acquire lock
+        with open(lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+        yield
+    finally:
+        # Release lock
+        try:
+            os.remove(lock_file)
+        except FileNotFoundError:
+            pass
+
+# 12. API Authentication Context Manager
+@contextmanager
+def authenticated_session(api_key: str, base_url: str):
+    session = requests.Session()
+    session.headers.update({
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json'
+    })
+    
+    try:
+        yield session
+    finally:
+        session.close()
+
+# 13. Database Migration Context Manager
+@contextmanager
+def database_migration(version: str, rollback_on_error: bool = True):
+    print(f"Starting migration to version {version}")
+    backup_created = False
+    
+    try:
+        # Create backup
+        print("Creating database backup...")
+        backup_created = True
+        
+        # Apply migration
+        print(f"Applying migration {version}...")
+        yield
+        
+        print(f"Migration {version} completed successfully")
+    except Exception as e:
+        print(f"Migration {version} failed: {e}")
+        if rollback_on_error and backup_created:
+            print("Rolling back to previous version...")
+        raise
+    finally:
+        if backup_created:
+            print("Cleaning up backup files...")
+
+# 14. Memory Usage Context Manager
+@contextmanager
+def memory_monitor(threshold_mb: int = 100):
+    import psutil
+    process = psutil.Process()
+    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+    
+    try:
+        yield
+    finally:
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_used = final_memory - initial_memory
+        
+        if memory_used > threshold_mb:
+            print(f"Warning: High memory usage detected: {memory_used:.2f}MB")
+
+# 15. Circuit Breaker Context Manager
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+    
+    def __enter__(self):
+        if self.state == "OPEN":
+            if time.time() - self.last_failure_time > self.timeout:
+                self.state = "HALF_OPEN"
+            else:
+                raise RuntimeError("Circuit breaker is OPEN")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.state = "OPEN"
+                print("Circuit breaker opened due to too many failures")
+        else:
+            if self.state == "HALF_OPEN":
+                self.state = "CLOSED"
+            self.failure_count = 0
+
+# Usage examples for advanced context managers
+def demonstrate_advanced_context_managers():
+    print("\n=== Advanced Context Managers Demo ===\n")
+    
+    # 1. Database connection
+    print("1. Database Connection:")
+    with DatabaseConnection("postgresql://localhost/mydb") as conn:
+        print(f"Using connection: {conn}")
+        # Simulate database operations
+    
+    # 2. Rate limiting
+    print("\n2. Rate Limiting:")
+    with RateLimiter(max_requests=3, time_window=1.0):
+        print("API call 1")
+    with RateLimiter(max_requests=3, time_window=1.0):
+        print("API call 2")
+    
+    # 3. Logging operations
+    print("\n3. Logging Operations:")
+    with log_operation("user_creation", user_id=123, email="test@example.com"):
+        time.sleep(0.1)  # Simulate work
+    
+    # 4. Performance monitoring
+    print("\n4. Performance Monitoring:")
+    with performance_monitor("data_processing"):
+        time.sleep(0.05)  # Simulate processing
+    
+    # 5. Connection pool
+    print("\n5. Connection Pool:")
+    pool = ConnectionPool(max_connections=2)
+    with pool as conn1:
+        print(f"Using connection: {conn1}")
+        with pool as conn2:
+            print(f"Using connection: {conn2}")
+    
+    # 6. Circuit breaker
+    print("\n6. Circuit Breaker:")
+    breaker = CircuitBreaker(failure_threshold=2)
+    try:
+        with breaker:
+            print("Operation 1 - should succeed")
+    except Exception as e:
+        print(f"Operation failed: {e}")
+    
+    # 7. Temporary file
+    print("\n7. Temporary File:")
+    with temporary_file(prefix="test_", suffix=".json") as temp_path:
+        print(f"Created temporary file: {temp_path}")
+        # File will be automatically deleted after this block
+    
+    # 8. Database transaction
+    print("\n8. Database Transaction:")
+    with database_transaction_with_rollback("mock_db") as txn_id:
+        print(f"Performing operations in transaction {txn_id}")
+        # Simulate successful transaction
+    
+    # 9. Cache context
+    print("\n9. Cache Context:")
+    with CacheContext("user_profile_123") as cached_data:
+        if cached_data is None:
+            print("Fetching data from database...")
+            # Simulate database fetch
+        else:
+            print("Using cached data")
+
+# ============================================================================
 # 5. ASYNC/AWAIT (Very similar to JS async/await)
 # ============================================================================
 
@@ -564,6 +916,9 @@ async def main():
     user_request = UserCreateRequest(name="Alice", email="alice@example.com")
     response = await user_service.create_user(user_request)
     print(f"Created user response: {response.user.name}, Token: {response.token}")
+
+    # Add context managers demo
+    demonstrate_advanced_context_managers()
 
 if __name__ == "__main__":
     asyncio.run(main())
